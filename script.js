@@ -23,6 +23,7 @@ const GORILLA_RADIUS = 20;
 const BULLET_SPEED_MULTIPLIER = 1.5; // Make bullets faster (1 = normal, >1 faster)
 const MAX_SHOOT_STRENGTH = 250; // Define max player input strength
 const MIN_SHOOT_STRENGTH = 10; // Define min player input strength
+const BULLET_IMMUNITY_DURATION = 0.05; // Seconds (50ms) of immunity after firing
 
 
 // Set canvas dimensions
@@ -58,11 +59,6 @@ function compute_circle_intersection_area(r1, r2, d) {
     angle1_arg = Math.max(-1, Math.min(1, angle1_arg));
     angle2_arg = Math.max(-1, Math.min(1, angle2_arg));
 
-    const angle1 = 2 * Math.acos(angle1_arg); // Angle of the sector in circle 1 (actually double this for the full angle, but calculation below uses half angle based formula implicitly?) No, the formula derived uses acos directly.
-    const angle2 = 2 * Math.acos(angle2_arg); // Angle of the sector in circle 2
-
-    // Let's use the formula directly derived from subtracting triangle areas from sector areas
-    // Area = r1^2 * acos((d^2 + r1^2 - r2^2)/(2*d*r1)) + r2^2 * acos((d^2 + r2^2 - r1^2)/(2*d*r2)) - 0.5 * sqrt((-d+r1+r2)*(d+r1-r2)*(d-r1+r2)*(d+r1+r2))
     const acos1 = Math.acos(angle1_arg);
     const acos2 = Math.acos(angle2_arg);
 
@@ -81,9 +77,7 @@ function compute_circle_intersection_area(r1, r2, d) {
          return 0; // Fallback to zero area
     }
 
-
     const term3 = 0.5 * Math.sqrt(term3_sqrt_arg);
-
     const intersectionArea = term1 + term2 - term3;
 
     if (isNaN(intersectionArea) || intersectionArea < 0) {
@@ -310,22 +304,25 @@ class Gorilla {
 }
 
 class Bullet {
-    constructor(x, y, angle, strength) {
+    constructor(x, y, angle, strength, firingGorillaIndex) { // Added firingGorillaIndex
         this.x = x;
         this.y = y;
-        // Convert angle to radians for Math functions
+        this.firingGorillaIndex = firingGorillaIndex; // Store who fired it
+        this.timeAlive = 0; // Initialize time alive
+
         const radAngle = angle * Math.PI / 180;
         // Apply speed multiplier to initial velocity
-        const initialSpeed = strength * BULLET_SPEED_MULTIPLIER; // <<< Use multiplier
+        const initialSpeed = strength * BULLET_SPEED_MULTIPLIER; // Use multiplier
         this.vx = initialSpeed * Math.cos(radAngle);
         this.vy = -initialSpeed * Math.sin(radAngle); // Negative because Y increases downwards
     }
 
     update(deltaTime) {
+        this.timeAlive += deltaTime; // Increment time alive
         // Simple Euler integration
         this.x += this.vx * deltaTime;
         this.y += this.vy * deltaTime;
-        this.vy += GRAVITY * deltaTime; // Gravity pulls down (increases vy)
+        this.vy += GRAVITY * deltaTime;
     }
 
     draw(ctx) {
@@ -334,21 +331,15 @@ class Bullet {
         ctx.fillRect(this.x - BULLET_SIZE / 2, this.y - BULLET_SIZE / 2, BULLET_SIZE, BULLET_SIZE);
     }
 
-    check_collision(buildings, gorillas, turn) {
+    check_collision(buildings, gorillas, turn) { // 'turn' is still passed but less relevant now we have firingGorillaIndex
         // Use bullet center for collision checks
         const checkX = this.x;
         const checkY = this.y;
 
-        // Check ground collision
-        if (checkY > SCREEN_HEIGHT) { // Check center against ground
-            return { type: "ground", x: checkX, y: SCREEN_HEIGHT };
-        }
-        // Check wall collision
-        if (checkX < 0 || checkX > SCREEN_WIDTH) {
-            return { type: "wall", x: checkX, y: checkY };
-        }
+        // --- Immunity Check ---
+        const isImmune = this.timeAlive < BULLET_IMMUNITY_DURATION;
 
-        // Define bullet rect for gorilla collision (AABB check)
+        // Define bullet rect for AABB checks
         const bulletRect = {
             x: this.x - BULLET_SIZE / 2,
             y: this.y - BULLET_SIZE / 2,
@@ -356,45 +347,72 @@ class Bullet {
             height: BULLET_SIZE
         };
 
-        // Check gorilla collision (only opponent)
-        const opponentIndex = 1 - turn;
-        const opponent = gorillas[opponentIndex];
-        const gorillaRect = opponent.get_rect();
-        if (rectOverlap(bulletRect, gorillaRect)) {
-            // Direct hit on opponent
-             return { type: "direct", targetIndex: opponentIndex, x: checkX, y: checkY };
+        // --- Ground and Wall Checks (Apply regardless of immunity) ---
+        if (checkY > SCREEN_HEIGHT) {
+            return { type: "ground", x: checkX, y: SCREEN_HEIGHT };
+        }
+        if (checkX < 0 || checkX > SCREEN_WIDTH) {
+            return { type: "wall", x: checkX, y: checkY };
         }
 
-        // Check collision with own gorilla
-        const ownGorilla = gorillas[turn];
-        const ownGorillaRect = ownGorilla.get_rect();
-         // Ensure bullet has moved away slightly from the firing gorilla first
-         const distSqFromOwn = (this.x - ownGorilla.x)**2 + (this.y - ownGorilla.y)**2;
-         // Use gorilla radius + bullet radius (approx) for distance check
-        if (distSqFromOwn > (ownGorilla.radius + BULLET_SIZE/2)**2 && rectOverlap(bulletRect, ownGorillaRect) ) {
-            // Hit self - treat like hitting a building (causes explosion)
-            console.log("Hit self!"); // For debugging
-             destroyedCircles.push({ x: checkX, y: checkY, radius: DESTROYED_CIRCLE_SIZE });
-             return { type: "building", x: checkX, y: checkY }; // Re-use building hit logic for self-damage
+        // --- Gorilla Checks ---
+        for (let i = 0; i < gorillas.length; i++) {
+            const gorilla = gorillas[i];
+            const gorillaRect = gorilla.get_rect();
+
+            if (rectOverlap(bulletRect, gorillaRect)) {
+                if (i === this.firingGorillaIndex && isImmune) {
+                    // Bullet is immune to the gorilla that fired it
+                    // console.log("Immune collision with self"); // Debug
+                    continue; // Skip this collision check
+                } else if (i === this.firingGorillaIndex) {
+                     // Hit self *after* immunity
+                     console.log("Hit self!");
+                     destroyedCircles.push({ x: checkX, y: checkY, radius: DESTROYED_CIRCLE_SIZE });
+                     return { type: "building", x: checkX, y: checkY }; // Treat as building hit
+                } else {
+                    // Direct hit on opponent
+                    return { type: "direct", targetIndex: i, x: checkX, y: checkY };
+                }
+            }
         }
 
 
-        // Check building collision
+        // --- Building Checks ---
+        // Find the building the firing gorilla is approximately on (for immunity)
+        let firingBuilding = null;
+        if (isImmune) { // Only need to find the building if immune period is active
+             const ownGorilla = gorillas[this.firingGorillaIndex];
+             for (const building of buildings) {
+                 // Check if gorilla's center X is within building bounds and Y is close to the top
+                 if (ownGorilla.x >= building.x && ownGorilla.x < building.x + building.width &&
+                     Math.abs((SCREEN_HEIGHT - building.height) - ownGorilla.y) < GORILLA_RADIUS * 1.5) { // Check Y pos relative to building top (allow some tolerance)
+                     firingBuilding = building;
+                     break;
+                 }
+             }
+        }
+
+
         for (const building of buildings) {
             const buildingRect = building.get_rect();
 
-            // Broad phase: Check if bullet rect overlaps building rect
             if (rectOverlap(bulletRect, buildingRect)) {
-                // Narrow phase: Check if the bullet's *center* point is within the building's rectangle vertical bounds
-                // Make sure bullet is *above* ground and *below* or *at* building top.
+                // Narrow phase: Check vertical position relative to building and screen
                 if (checkY >= buildingRect.y && checkY <= SCREEN_HEIGHT) {
-                    // Point is vertically plausible for this building. Now check if it's destroyed.
+                    // Apply immunity if colliding with the firing gorilla's building
+                    if (isImmune && building === firingBuilding) {
+                        // console.log("Immune collision with firing building"); // Debug log
+                        continue; // Skip collision check for this specific building during immunity
+                    }
+
+                    // If not immune or not the firing building, check if the point is destroyed
                     if (!building.is_point_destroyed(checkX, checkY)) {
-                        // Hit a SOLID (non-destroyed) part of the building. Explode here.
+                        // Hit a SOLID (non-destroyed) part.
                         destroyedCircles.push({ x: checkX, y: checkY, radius: DESTROYED_CIRCLE_SIZE });
                         return { type: "building", x: checkX, y: checkY };
                     }
-                    // else: Hit a destroyed part. The bullet continues.
+                    // else: Hit a destroyed part, bullet continues.
                 }
             }
         }
@@ -503,10 +521,6 @@ class Game {
          const upDuration = Math.min(this.keyPressDurations.ArrowUp, maxAccelDuration);
          const downDuration = Math.min(this.keyPressDurations.ArrowDown, maxAccelDuration);
 
-         // Use quadratic acceleration for a smoother feel (optional)
-         // const accelFactorAngle = 1 + angleAccelMultiplier * Math.pow(Math.max(leftDuration, rightDuration) / maxAccelDuration, 2);
-         // const accelFactorStrength = 1 + strengthAccelMultiplier * Math.pow(Math.max(upDuration, downDuration) / maxAccelDuration, 2);
-
          // Linear acceleration (simpler)
          const accelFactorAngle = 1 + angleAccelMultiplier * Math.max(leftDuration / maxAccelDuration, rightDuration / maxAccelDuration);
          const accelFactorStrength = 1 + strengthAccelMultiplier * Math.max(upDuration / maxAccelDuration, downDuration / maxAccelDuration);
@@ -543,28 +557,30 @@ class Game {
          if (this.angles[this.turn] < 0) this.angles[this.turn] += 360;
 
         // Clamp strength between MIN and MAX defined constants
-        this.strengths[this.turn] = Math.max(MIN_SHOOT_STRENGTH, Math.min(MAX_SHOOT_STRENGTH, this.strengths[this.turn] + strength_change)); // <<< Use MAX_SHOOT_STRENGTH
+        this.strengths[this.turn] = Math.max(MIN_SHOOT_STRENGTH, Math.min(MAX_SHOOT_STRENGTH, this.strengths[this.turn] + strength_change)); // Use MAX_SHOOT_STRENGTH
     }
 
     shoot() {
-        if (this.bullet || this.gameOver) return; // Don't shoot if bullet exists or game over
+        if (this.bullet || this.gameOver) return;
 
         const gorilla = this.gorillas[this.turn];
         const angle = this.angles[this.turn];
         const strength = this.strengths[this.turn];
 
-        // Calculate starting position slightly offset from gorilla center along the angle
         const radAngle = angle * Math.PI / 180;
-        const startOffset = gorilla.radius + BULLET_SIZE / 2 + 1; // Add 1 pixel buffer
+        // Use a fixed offset slightly larger than gorilla radius + bullet radius
+        const startOffset = 30; // Increased offset for safety
         const startOffsetX = startOffset * Math.cos(radAngle);
-        const startOffsetY = -startOffset * Math.sin(radAngle); // Negative sin for Y-down coord
+        const startOffsetY = -startOffset * Math.sin(radAngle);
 
         const bulletX = gorilla.x + startOffsetX;
         const bulletY = gorilla.y + startOffsetY;
 
-        this.bullet = new Bullet(bulletX, bulletY, angle, strength);
+        // Pass 'this.turn' (the index of the firing gorilla) to the Bullet constructor
+        this.bullet = new Bullet(bulletX, bulletY, angle, strength, this.turn); // Pass this.turn
+
         this.shots_fired[this.turn]++;
-        this.message = ""; // Clear previous message, will be updated on hit or turn change
+        this.message = ""; // Clear message, will be updated on hit or turn change
     }
 
 
@@ -658,10 +674,8 @@ class Game {
         } else {
              // Switch turns only if game is not over and the bullet hit something
              this.turn = 1 - this.turn;
-             // Update message only if it wasn't set by the hit itself (e.g., not direct hit/building)
-             if (!this.message || this.message.endsWith("Turn")) { // Avoid overwriting hit messages
-                 this.message = `Player ${this.turn + 1} Turn`;
-             }
+             // Update message for next turn, but don't overwrite the hit message immediately
+             // The UI drawing logic will show "Player X Turn" if no other message is active
         }
     }
 
@@ -697,12 +711,12 @@ class Game {
              ctx.fillStyle = YELLOW;
              ctx.font = "40px sans-serif";
              ctx.textAlign = "center";
-             this.wrapText(ctx, this.message, SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2 - 20, SCREEN_WIDTH / 2 - 40, 45);
+             this.wrapText(ctx, this.message, SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2, SCREEN_WIDTH / 2 - 40, 45); // Centered Y
              ctx.textAlign = "left"; // Reset
          }
     }
 
-    // Helper for basic text wrapping
+    // Helper for basic text wrapping, centered vertically
     wrapText(context, text, x, y, maxWidth, lineHeight) {
         if (!text) return; // Safety check
         var words = text.split(' ');
@@ -726,12 +740,12 @@ class Game {
 
         // Calculate starting Y for vertical centering
         const totalTextHeight = lines.length * lineHeight;
-        // Assuming the wrapText is called with y as the intended center of the text block
-        let currentY = y - totalTextHeight / 2 + lineHeight / 2; // Adjust start Y
+        // Assuming y is the intended vertical center of the text block
+        let currentY = y - totalTextHeight / 2 + lineHeight / 2;
 
         context.textBaseline = 'middle'; // Align text vertically better
 
-        // Second pass: draw the lines centered
+        // Second pass: draw the lines centered horizontally
         for (let i = 0; i < lines.length; i++) {
             context.fillText(lines[i], x, currentY);
             currentY += lineHeight;
@@ -803,14 +817,14 @@ class Game {
 
         // Display Message (Below Top UI, Above Center) - Show turn info if no other hit message
         let displayMessage = this.message;
-        if (!this.gameOver && !this.bullet && (!this.message || this.message.includes("Turn"))) {
+        // Only show "Player X Turn" if the game isn't over, no bullet is flying, and the current message isn't a hit result
+        if (!this.gameOver && !this.bullet && (!this.message || this.message.endsWith("Turn"))) {
              displayMessage = `Player ${this.turn + 1} Turn`;
         } else if (this.gameOver){
             displayMessage = ""; // Don't show turn message if game over overlay is shown
         }
 
-
-        if (displayMessage && !this.gameOver) { // Only show if not game over
+        if (displayMessage) { // Show message if not empty and not game over
             ctx.fillStyle = YELLOW;
             ctx.font = "24px sans-serif";
             ctx.textAlign = "center";
