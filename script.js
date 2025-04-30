@@ -646,9 +646,10 @@ class Game {
         this.gorillas.forEach(g => { if (g.health < 0) g.health = 0; });
 
         // --- Check for Game Over ---
-        let winner = -1;
+        let winner = -1; // Initialize winner index
         const p1_dead = this.gorillas[0].health <= 0;
         const p2_dead = this.gorillas[1].health <= 0;
+        roundOver = false; // Reset roundOver flag for this hit check
 
         if (p1_dead && p2_dead) {
              winner = 1 - this.turn; // Opponent wins if both die on current turn's shot
@@ -665,14 +666,22 @@ class Game {
         }
 
         if (roundOver) {
-            this.scores[winner]++;
-            this.gameOver = true; // Pause updates
-            const roundEndTime = performance.now();
-            this.totalTimePaused += (roundEndTime - this.startTime);
-            // Show game over message and wait before reset
-            setTimeout(() => this.reset_game(), 3000); // Reset after 3 seconds
+            // Ensure winner index is valid (0 or 1) before proceeding
+            if (winner !== -1) {
+                this.scores[winner]++;
+                this.gameOver = true; // Pause updates
+                const roundEndTime = performance.now();
+                this.totalTimePaused += (roundEndTime - this.startTime);
+
+                // Pass the winner index to reset_game via setTimeout
+                setTimeout(() => this.reset_game(winner), 3000); // <<< Pass winner index
+            } else {
+                 console.error("Round over but winner index is invalid:", winner); // Should not happen if logic above is correct
+                 // Handle potential error state, maybe just reset without changing turn?
+                 setTimeout(() => this.reset_game(), 3000); // Fallback reset
+            }
         } else {
-             // Switch turns only if game is not over and the bullet hit something
+             // Switch turns only if game is not over
              this.turn = 1 - this.turn;
              // Update message for next turn, but don't overwrite the hit message immediately
              // The UI drawing logic will show "Player X Turn" if no other message is active
@@ -899,16 +908,29 @@ class Game {
         this.nextBlinkTime = currentTime + (Math.random() * 0.5 + 0.25) * 1000; // 0.25 to 0.75 seconds later
     }
 
-    reset_game() {
-        console.log("Resetting game...");
+    reset_game(winnerIndex) { // <<< Added winnerIndex parameter
+        console.log(`Resetting game. Previous winner index: ${winnerIndex}`);
         destroyedCircles = []; // Clear explosion marks
         this.buildings = this.create_buildings();
         // Make sure gorillas are placed *after* new buildings exist
         this.gorillas = this.place_gorillas();
         this.bullet = null;
-        // this.turn remains the same, winner starts next round? Or alternate? Keep same for now.
+
+        // --- Set next turn based on loser ---
+        if (winnerIndex !== undefined && winnerIndex !== -1 && winnerIndex >= 0 && winnerIndex <= 1) { // Check if a valid winner was passed
+            const loserIndex = 1 - winnerIndex;
+            this.turn = loserIndex; // <<< Loser starts next round
+            console.log(`Loser (${loserIndex + 1}) starts next round.`);
+        } else {
+            // Fallback if no valid winner was passed (e.g., first game start)
+             console.warn("Resetting game without a valid previous winner index. Defaulting turn to 0.");
+             this.turn = 0; // Default to player 1 start
+        }
+
         this.message = `Player ${this.turn + 1} Turn`; // Indicate whose turn starts
-        // Keep scores, shots_fired, totalTimePaused
+
+        // Keep scores, shots_fired, totalTimePaused (already handled)
+
         // Reset angles/strengths
         this.angles = [45, 135];
         this.strengths = [100, 100];
