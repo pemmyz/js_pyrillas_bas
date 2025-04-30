@@ -18,9 +18,12 @@ const SCREEN_HEIGHT = 1010;
 const GRAVITY = 19.6 * 5; // Adjusted for web frame rates (trial and error)
 const BULLET_SIZE = 10;
 const DESTROYED_CIRCLE_SIZE = 60;
-const TIME_SCALE = 0.05; // Might need adjustment or removal if using deltaTime fully
-const ARROW_SPEED = 50;
+const ARROW_SPEED = 50; // Base speed for angle/strength change
 const GORILLA_RADIUS = 20;
+const BULLET_SPEED_MULTIPLIER = 1.5; // Make bullets faster (1 = normal, >1 faster)
+const MAX_SHOOT_STRENGTH = 250; // Define max player input strength
+const MIN_SHOOT_STRENGTH = 10; // Define min player input strength
+
 
 // Set canvas dimensions
 canvas.width = SCREEN_WIDTH;
@@ -34,40 +37,66 @@ let game; // Will hold the Game instance
 // --- Helper Functions ---
 
 function compute_circle_intersection_area(r1, r2, d) {
+    // Check for no intersection or one circle contained within the other
     if (d >= r1 + r2) {
-        return 0;
+        return 0; // No overlap
     }
     if (d <= Math.abs(r2 - r1)) {
+        // Full containment, return area of smaller circle
         return Math.PI * Math.min(r1, r2) ** 2;
     }
-    const r1_sq = r1**2;
-    const r2_sq = r2**2;
-    // Check for invalid acos input due to floating point errors
-    const acos_arg1 = (d**2 + r1_sq - r2_sq) / (2 * d * r1);
-    const acos_arg2 = (d**2 + r2_sq - r1_sq) / (2 * d * r2);
 
-    if (acos_arg1 > 1 || acos_arg1 < -1 || acos_arg2 > 1 || acos_arg2 < -1) {
-         // This can happen if d is very close to r1+r2 or |r1-r2|
-         // If d is almost r1+r2, area is almost 0
-         if (Math.abs(d - (r1 + r2)) < 1e-6) return 0;
-         // If d is almost |r1-r2|, area is almost pi * min(r1,r2)^2
-         if (Math.abs(d - Math.abs(r1-r2)) < 1e-6) return Math.PI * Math.min(r1, r2)**2;
-         // Fallback or error - returning 0 is safer than NaN
-         console.warn("Invalid acos arguments in intersection:", acos_arg1, acos_arg2);
-         return 0;
+    const r1_sq = r1*r1;
+    const r2_sq = r2*r2;
+    const d_sq = d*d;
+
+    // Check for edge cases where arguments to acos might be slightly outside [-1, 1] due to floating point errors
+    let angle1_arg = (d_sq + r1_sq - r2_sq) / (2 * d * r1);
+    let angle2_arg = (d_sq + r2_sq - r1_sq) / (2 * d * r2);
+
+    // Clamp arguments to the valid range [-1, 1]
+    angle1_arg = Math.max(-1, Math.min(1, angle1_arg));
+    angle2_arg = Math.max(-1, Math.min(1, angle2_arg));
+
+    const angle1 = 2 * Math.acos(angle1_arg); // Angle of the sector in circle 1 (actually double this for the full angle, but calculation below uses half angle based formula implicitly?) No, the formula derived uses acos directly.
+    const angle2 = 2 * Math.acos(angle2_arg); // Angle of the sector in circle 2
+
+    // Let's use the formula directly derived from subtracting triangle areas from sector areas
+    // Area = r1^2 * acos((d^2 + r1^2 - r2^2)/(2*d*r1)) + r2^2 * acos((d^2 + r2^2 - r1^2)/(2*d*r2)) - 0.5 * sqrt((-d+r1+r2)*(d+r1-r2)*(d-r1+r2)*(d+r1+r2))
+    const acos1 = Math.acos(angle1_arg);
+    const acos2 = Math.acos(angle2_arg);
+
+    const term1 = r1_sq * acos1;
+    const term2 = r2_sq * acos2;
+    const term3_sqrt_arg = (-d + r1 + r2) * (d + r1 - r2) * (d - r1 + r2) * (d + r1 + r2);
+
+    // If sqrt argument is negative due to float errors near boundaries, treat as zero overlap or full containment handled earlier
+    if (term3_sqrt_arg < 0 && term3_sqrt_arg > -1e-9) { // Allow small negative tolerance
+         term3_sqrt_arg = 0;
+    } else if (term3_sqrt_arg < 0) {
+        console.warn("Negative sqrt argument in intersection, likely float error near boundary:", term3_sqrt_arg);
+         // Determine if it's closer to no overlap or full containment based on d vs r1+r2 and |r1-r2|
+         if (Math.abs(d - (r1+r2)) < 1e-4) return 0;
+         if (Math.abs(d - Math.abs(r1-r2)) < 1e-4) return Math.PI * Math.min(r1, r2)**2;
+         return 0; // Fallback to zero area
     }
 
-    const part1 = r1_sq * Math.acos(acos_arg1);
-    const part2 = r2_sq * Math.acos(acos_arg2);
-    const part3 = 0.5 * Math.sqrt((-d + r1 + r2) * (d + r1 - r2) * (d - r1 + r2) * (d + r1 + r2));
 
-    if (isNaN(part1) || isNaN(part2) || isNaN(part3)) {
-        console.error("NaN detected in intersection calculation", {r1, r2, d, part1, part2, part3});
-        return 0; // Avoid NaN propagation
+    const term3 = 0.5 * Math.sqrt(term3_sqrt_arg);
+
+    const intersectionArea = term1 + term2 - term3;
+
+    if (isNaN(intersectionArea) || intersectionArea < 0) {
+        console.error("NaN or negative intersection area calculated", {r1, r2, d, term1, term2, term3, intersectionArea});
+        // Attempt recovery based on distance
+        if (d >= r1 + r2) return 0;
+        if (d <= Math.abs(r2 - r1)) return Math.PI * Math.min(r1, r2) ** 2;
+        return 0; // Fallback
     }
 
-    return part1 + part2 - part3;
+    return intersectionArea;
 }
+
 
 function compute_explosion_damage(explosion_center, explosion_radius, player_center, player_radius = GORILLA_RADIUS) {
     const d = Math.hypot(explosion_center.x - player_center.x, explosion_center.y - player_center.y);
@@ -83,7 +112,10 @@ function compute_explosion_damage(explosion_center, explosion_radius, player_cen
     }
 
     const player_area = Math.PI * player_radius**2;
-    const fraction = intersection_area / player_area;
+    // Prevent division by zero if player_radius is 0
+    if (player_area < 1e-6) return 90; // If player area is tiny, assume full damage on overlap
+
+    const fraction = Math.min(1, intersection_area / player_area); // Cap fraction at 1
     let damage = 20 + fraction * 70; // Scale between 20 and 90
     damage = Math.max(20, Math.min(90, damage)); // Clamp damage
     return damage;
@@ -100,7 +132,7 @@ class Sky {
     }
 
     draw(ctx) {
-        // Background handled by CSS or main draw clear
+        // Background
         ctx.fillStyle = BLUE;
         ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
 
@@ -149,7 +181,7 @@ class Sky {
             y: this.sun_center.y - this.sun_radius / 2
         };
 
-        ctx.fillStyle = BLUE;
+        ctx.fillStyle = BLUE; // Eyes same color as sky background
         ctx.beginPath();
         ctx.arc(left_eye_pos.x, left_eye_pos.y, eye_radius, 0, Math.PI * 2);
         ctx.fill();
@@ -161,14 +193,14 @@ class Sky {
         ctx.strokeStyle = BLUE;
         ctx.lineWidth = 2;
         ctx.beginPath();
-        // Note: Canvas arc angles are different from Pygame's
-        // Arc: center x, center y, radius, startAngle, endAngle, anticlockwise (false=default)
         ctx.arc(this.sun_center.x, this.sun_center.y, this.sun_radius * 0.6, 0, Math.PI);
         ctx.stroke();
     }
 
     update(deltaTime) {
-        this.ray_angle += 1 * deltaTime * 60; // Adjust speed based on deltaTime
+        // Ensure ray_angle doesn't grow indefinitely large
+        const speed = 60; // degrees per second roughly
+        this.ray_angle = (this.ray_angle + speed * deltaTime * Math.PI / 180) % (2 * Math.PI);
     }
 }
 
@@ -184,6 +216,9 @@ class Building {
     initialize_window_states() {
         const num_windows_y = Math.floor((this.height - 10) / 20);
         const states = [];
+        // Ensure num_windows_y is not negative
+        if (num_windows_y <= 0) return [];
+
         for (let r = 0; r < num_windows_y; r++) {
             const row = [];
              // Only 3 columns of windows as per original code
@@ -202,10 +237,13 @@ class Building {
     }
 
     draw_windows(ctx) {
-        if (!this.window_states) return; // Safety check
+        if (!this.window_states || this.window_states.length === 0) return; // Safety check
 
         for (let row_idx = 0; row_idx < this.window_states.length; row_idx++) {
             const row = this.window_states[row_idx];
+            // Check if row exists and has columns
+             if (!row || row.length === 0) continue;
+
             for (let col_idx = 0; col_idx < row.length; col_idx++) {
                 const window_on = row[col_idx];
                 ctx.fillStyle = window_on ? YELLOW : DARK_GREY;
@@ -216,9 +254,7 @@ class Building {
         }
     }
 
-    // Note: Destroy part is handled by adding to global `destroyedCircles`
-    // Building itself doesn't track destruction, just its visual state
-
+    // Checks if a specific point (x, y) falls within any explosion circle
     is_point_destroyed(x, y) {
         for (const circle of destroyedCircles) {
             const dist_sq = (x - circle.x) ** 2 + (y - circle.y) ** 2;
@@ -249,16 +285,17 @@ class Gorilla {
 
     draw(ctx) {
         // Draw Gorilla Body
-        ctx.fillStyle = RED; // Or another color like brown/black? Pygame used RED
+        ctx.fillStyle = RED; // Pygame used RED
         ctx.beginPath();
         ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
         ctx.fill();
 
         // Draw Health Text
         ctx.fillStyle = WHITE;
-        ctx.font = "24px sans-serif"; // Slightly smaller font?
+        ctx.font = "24px sans-serif";
         ctx.textAlign = "center";
-        ctx.fillText(Math.round(this.health), this.x, this.y - this.radius - 5); // Position above gorilla
+        // Use Math.max to prevent showing negative health
+        ctx.fillText(Math.max(0, Math.round(this.health)), this.x, this.y - this.radius - 5); // Position above gorilla
         ctx.textAlign = "left"; // Reset alignment
     }
 
@@ -278,9 +315,10 @@ class Bullet {
         this.y = y;
         // Convert angle to radians for Math functions
         const radAngle = angle * Math.PI / 180;
-        this.vx = strength * Math.cos(radAngle);
-        this.vy = -strength * Math.sin(radAngle); // Negative because Y increases downwards
-        // Removed time tracking as we use deltaTime directly
+        // Apply speed multiplier to initial velocity
+        const initialSpeed = strength * BULLET_SPEED_MULTIPLIER; // <<< Use multiplier
+        this.vx = initialSpeed * Math.cos(radAngle);
+        this.vy = -initialSpeed * Math.sin(radAngle); // Negative because Y increases downwards
     }
 
     update(deltaTime) {
@@ -292,19 +330,25 @@ class Bullet {
 
     draw(ctx) {
         ctx.fillStyle = YELLOW;
+        // Draw bullet centered
         ctx.fillRect(this.x - BULLET_SIZE / 2, this.y - BULLET_SIZE / 2, BULLET_SIZE, BULLET_SIZE);
     }
 
     check_collision(buildings, gorillas, turn) {
+        // Use bullet center for collision checks
+        const checkX = this.x;
+        const checkY = this.y;
+
         // Check ground collision
-        if (this.y + BULLET_SIZE / 2 > SCREEN_HEIGHT) {
-            return { type: "ground", x: this.x, y: SCREEN_HEIGHT };
+        if (checkY > SCREEN_HEIGHT) { // Check center against ground
+            return { type: "ground", x: checkX, y: SCREEN_HEIGHT };
         }
         // Check wall collision
-        if (this.x < 0 || this.x > SCREEN_WIDTH) {
-            return { type: "wall", x: this.x, y: this.y };
+        if (checkX < 0 || checkX > SCREEN_WIDTH) {
+            return { type: "wall", x: checkX, y: checkY };
         }
 
+        // Define bullet rect for gorilla collision (AABB check)
         const bulletRect = {
             x: this.x - BULLET_SIZE / 2,
             y: this.y - BULLET_SIZE / 2,
@@ -317,31 +361,45 @@ class Bullet {
         const opponent = gorillas[opponentIndex];
         const gorillaRect = opponent.get_rect();
         if (rectOverlap(bulletRect, gorillaRect)) {
-            // Direct hit damage is handled in handle_bullet_hit
-             return { type: "direct", targetIndex: opponentIndex, x: this.x, y: this.y };
+            // Direct hit on opponent
+             return { type: "direct", targetIndex: opponentIndex, x: checkX, y: checkY };
         }
+
+        // Check collision with own gorilla
+        const ownGorilla = gorillas[turn];
+        const ownGorillaRect = ownGorilla.get_rect();
+         // Ensure bullet has moved away slightly from the firing gorilla first
+         const distSqFromOwn = (this.x - ownGorilla.x)**2 + (this.y - ownGorilla.y)**2;
+         // Use gorilla radius + bullet radius (approx) for distance check
+        if (distSqFromOwn > (ownGorilla.radius + BULLET_SIZE/2)**2 && rectOverlap(bulletRect, ownGorillaRect) ) {
+            // Hit self - treat like hitting a building (causes explosion)
+            console.log("Hit self!"); // For debugging
+             destroyedCircles.push({ x: checkX, y: checkY, radius: DESTROYED_CIRCLE_SIZE });
+             return { type: "building", x: checkX, y: checkY }; // Re-use building hit logic for self-damage
+        }
+
 
         // Check building collision
         for (const building of buildings) {
             const buildingRect = building.get_rect();
+
+            // Broad phase: Check if bullet rect overlaps building rect
             if (rectOverlap(bulletRect, buildingRect)) {
-                 // Check if the collision point *within* the building is already destroyed
-                 // Use bullet's center point for this check
-                if (!building.is_point_destroyed(this.x, this.y)) {
-                    // Add explosion circle centered on the bullet's impact point
-                    destroyedCircles.push({ x: this.x, y: this.y, radius: DESTROYED_CIRCLE_SIZE });
-                    return { type: "building", x: this.x, y: this.y };
+                // Narrow phase: Check if the bullet's *center* point is within the building's rectangle vertical bounds
+                // Make sure bullet is *above* ground and *below* or *at* building top.
+                if (checkY >= buildingRect.y && checkY <= SCREEN_HEIGHT) {
+                    // Point is vertically plausible for this building. Now check if it's destroyed.
+                    if (!building.is_point_destroyed(checkX, checkY)) {
+                        // Hit a SOLID (non-destroyed) part of the building. Explode here.
+                        destroyedCircles.push({ x: checkX, y: checkY, radius: DESTROYED_CIRCLE_SIZE });
+                        return { type: "building", x: checkX, y: checkY };
+                    }
+                    // else: Hit a destroyed part. The bullet continues.
                 }
-                // If hit point is already destroyed, the bullet might continue through
-                // (This implementation stops it, matching Pygame behavior)
-                 // If we wanted pass-through, we'd skip the return here
-                 // For simplicity, let's keep it stopping on any hit
-                 // but only causing damage/explosion if it hits non-destroyed part
-                 return { type: "building_destroyed", x: this.x, y: this.y }; // Hit an already destroyed part
             }
         }
 
-        return null; // No collision
+        return null; // No solid collision detected in this frame
     }
 }
 
@@ -357,18 +415,18 @@ function rectOverlap(rect1, rect2) {
 class Game {
     constructor() {
         this.buildings = this.create_buildings();
-        this.gorillas = this.place_gorillas();
+        this.gorillas = this.place_gorillas(); // Ensure this is called after buildings are created
         this.sky = new Sky();
         this.bullet = null;
         this.turn = 0; // 0 for Player 1, 1 for Player 2
         this.angles = [45, 135]; // P1 aims right, P2 aims left initially
-        this.strengths = [100, 100];
+        this.strengths = [100, 100]; // Initial strength values
         this.scores = [0, 0];
         this.shots_fired = [0, 0];
         this.startTime = performance.now(); // Start time for the current round
         this.totalTimePaused = 0; // Time accumulated from previous rounds or pauses
         this.lastFrameTime = performance.now();
-        this.message = "";
+        this.message = "Player 1 Turn"; // Initial message
         this.keyPressDurations = { ArrowLeft: 0, ArrowRight: 0, ArrowUp: 0, ArrowDown: 0 };
         this.nextBlinkTime = performance.now() + (Math.random() * 0.5 + 0.25) * 1000;
         this.gameOver = false; // Flag to stop updates when resetting
@@ -389,11 +447,33 @@ class Game {
     }
 
      place_gorillas() {
-         // Place gorillas roughly on buildings 5 and 24 (0-indexed)
-         const buildingIndex1 = 5;
-         const buildingIndex2 = 24;
+         const num_buildings = this.buildings.length;
+         let buildingIndex1 = 5;
+         let buildingIndex2 = 24;
+
+         // Basic safety check for very few buildings
+         if (num_buildings <= buildingIndex2) {
+             console.warn(`Not enough buildings (${num_buildings}) for default placement. Adjusting.`);
+             buildingIndex1 = Math.floor(num_buildings * 0.2);
+             // Ensure index 2 is valid and different from index 1
+             buildingIndex2 = Math.min(num_buildings - 1, Math.max(buildingIndex1 + 1, Math.floor(num_buildings * 0.8)));
+             if (num_buildings <= 1) { // Edge case for 0 or 1 building
+                buildingIndex1 = 0;
+                buildingIndex2 = 0; // Gorillas will be on same building if only 1 exists
+             }
+         }
+
          const building1 = this.buildings[buildingIndex1];
-         const building2 = this.buildings[buildingIndex2];
+         // Safety check if index 2 ended up same as 1 due to low num_buildings
+         const building2 = (buildingIndex1 === buildingIndex2) ? building1 : this.buildings[buildingIndex2];
+
+         // Check if buildings exist (safety)
+         if (!building1 || !building2) {
+             console.error("Failed to find buildings for gorilla placement! Using fallback positions.");
+             // Place at fixed positions as a fallback
+             return [new Gorilla(SCREEN_WIDTH * 0.2, SCREEN_HEIGHT - GORILLA_RADIUS - 50),
+                     new Gorilla(SCREEN_WIDTH * 0.8, SCREEN_HEIGHT - GORILLA_RADIUS - 50)];
+         }
 
          const gorilla1X = building1.x + building1.width / 2;
          const gorilla1Y = SCREEN_HEIGHT - building1.height - GORILLA_RADIUS;
@@ -411,38 +491,59 @@ class Game {
          let angle_change = 0;
          let strength_change = 0;
 
-         const accelFactorAngle = 1 + 3 * Math.max(this.keyPressDurations.ArrowLeft, this.keyPressDurations.ArrowRight);
-         const accelFactorStrength = 1 + 2 * Math.max(this.keyPressDurations.ArrowUp, this.keyPressDurations.ArrowDown);
+         const baseAngleSpeed = ARROW_SPEED * 2; // degrees per second
+         const baseStrengthSpeed = ARROW_SPEED * 1.5; // units per second (increased slightly)
+
+         const maxAccelDuration = 1.0;
+         const angleAccelMultiplier = 3;
+         const strengthAccelMultiplier = 2.5; // Slightly increased accel
+
+         const leftDuration = Math.min(this.keyPressDurations.ArrowLeft, maxAccelDuration);
+         const rightDuration = Math.min(this.keyPressDurations.ArrowRight, maxAccelDuration);
+         const upDuration = Math.min(this.keyPressDurations.ArrowUp, maxAccelDuration);
+         const downDuration = Math.min(this.keyPressDurations.ArrowDown, maxAccelDuration);
+
+         // Use quadratic acceleration for a smoother feel (optional)
+         // const accelFactorAngle = 1 + angleAccelMultiplier * Math.pow(Math.max(leftDuration, rightDuration) / maxAccelDuration, 2);
+         // const accelFactorStrength = 1 + strengthAccelMultiplier * Math.pow(Math.max(upDuration, downDuration) / maxAccelDuration, 2);
+
+         // Linear acceleration (simpler)
+         const accelFactorAngle = 1 + angleAccelMultiplier * Math.max(leftDuration / maxAccelDuration, rightDuration / maxAccelDuration);
+         const accelFactorStrength = 1 + strengthAccelMultiplier * Math.max(upDuration / maxAccelDuration, downDuration / maxAccelDuration);
+
 
          if (keysPressed['ArrowLeft']) {
              this.keyPressDurations.ArrowLeft += deltaTime;
-             angle_change += (ARROW_SPEED * 2) * accelFactorAngle * deltaTime; // Make angle change faster
+             angle_change += baseAngleSpeed * accelFactorAngle * deltaTime;
          } else {
              this.keyPressDurations.ArrowLeft = 0;
          }
          if (keysPressed['ArrowRight']) {
              this.keyPressDurations.ArrowRight += deltaTime;
-             angle_change -= (ARROW_SPEED * 2) * accelFactorAngle * deltaTime;
+             angle_change -= baseAngleSpeed * accelFactorAngle * deltaTime;
          } else {
              this.keyPressDurations.ArrowRight = 0;
          }
          if (keysPressed['ArrowUp']) {
              this.keyPressDurations.ArrowUp += deltaTime;
-             strength_change += (ARROW_SPEED * 1) * accelFactorStrength * deltaTime; // Strength change slower
+             strength_change += baseStrengthSpeed * accelFactorStrength * deltaTime;
          } else {
              this.keyPressDurations.ArrowUp = 0;
          }
          if (keysPressed['ArrowDown']) {
              this.keyPressDurations.ArrowDown += deltaTime;
-             strength_change -= (ARROW_SPEED * 1) * accelFactorStrength * deltaTime;
+             strength_change -= baseStrengthSpeed * accelFactorStrength * deltaTime;
          } else {
              this.keyPressDurations.ArrowDown = 0;
          }
 
-        this.angles[this.turn] = (this.angles[this.turn] + angle_change) % 360;
-         if (this.angles[this.turn] < 0) this.angles[this.turn] += 360; // Keep angle positive
+        this.angles[this.turn] = (this.angles[this.turn] + angle_change);
+         // Keep angle between 0 and 360
+         if (this.angles[this.turn] >= 360) this.angles[this.turn] -= 360;
+         if (this.angles[this.turn] < 0) this.angles[this.turn] += 360;
 
-        this.strengths[this.turn] = Math.max(10, Math.min(300, this.strengths[this.turn] + strength_change)); // Clamp strength
+        // Clamp strength between MIN and MAX defined constants
+        this.strengths[this.turn] = Math.max(MIN_SHOOT_STRENGTH, Math.min(MAX_SHOOT_STRENGTH, this.strengths[this.turn] + strength_change)); // <<< Use MAX_SHOOT_STRENGTH
     }
 
     shoot() {
@@ -450,19 +551,20 @@ class Game {
 
         const gorilla = this.gorillas[this.turn];
         const angle = this.angles[this.turn];
-        const strength = this.strengths[this.turn]; // Use adjusted strength
+        const strength = this.strengths[this.turn];
 
         // Calculate starting position slightly offset from gorilla center along the angle
         const radAngle = angle * Math.PI / 180;
-        const startOffsetX = (gorilla.radius + BULLET_SIZE) * Math.cos(radAngle);
-        const startOffsetY = -(gorilla.radius + BULLET_SIZE) * Math.sin(radAngle); // Negative sin for Y-down coord
+        const startOffset = gorilla.radius + BULLET_SIZE / 2 + 1; // Add 1 pixel buffer
+        const startOffsetX = startOffset * Math.cos(radAngle);
+        const startOffsetY = -startOffset * Math.sin(radAngle); // Negative sin for Y-down coord
 
         const bulletX = gorilla.x + startOffsetX;
         const bulletY = gorilla.y + startOffsetY;
 
         this.bullet = new Bullet(bulletX, bulletY, angle, strength);
         this.shots_fired[this.turn]++;
-        this.message = ""; // Clear previous message
+        this.message = ""; // Clear previous message, will be updated on hit or turn change
     }
 
 
@@ -476,30 +578,35 @@ class Game {
             this.bullet.update(deltaTime);
             const hit = this.bullet.check_collision(this.buildings, this.gorillas, this.turn);
             if (hit) {
-                this.handle_bullet_hit(hit);
-                this.bullet = null; // Remove bullet after hit
+                this.handle_bullet_hit(hit); // This might set gameOver = true
+                this.bullet = null; // Remove bullet after hit processing
             }
         }
 
-        // Update Blinking Windows
-        const now = performance.now();
-        if (now >= this.nextBlinkTime) {
-            this.update_blinking(now);
+        // Update Blinking Windows (only if game not over)
+        if (!this.gameOver) {
+            const now = performance.now();
+            if (now >= this.nextBlinkTime) {
+                this.update_blinking(now);
+            }
         }
     }
 
     handle_bullet_hit(hit) {
         const explosion_center = { x: hit.x, y: hit.y };
+        let roundOver = false; // Flag to check if the round ended this hit
 
         if (hit.type === "direct") {
             const targetIndex = hit.targetIndex;
             this.message = `Direct hit on Player ${targetIndex + 1}!`;
             this.gorillas[targetIndex].health -= 100; // Direct hit is fatal
-        } else if (hit.type === "building") {
-            this.message = "Hit a building! ";
+        } else if (hit.type === "building") { // Includes self-hit case
+            this.message = hit.type === "building" ? "Hit a building! " : "Hit self! ";
             // Damage calculation for both gorillas from explosion
             for (let idx = 0; idx < this.gorillas.length; idx++) {
                 const gorilla = this.gorillas[idx];
+                if (gorilla.health <= 0) continue; // No damage if already dead
+
                 const damage = compute_explosion_damage(
                     explosion_center,
                     DESTROYED_CIRCLE_SIZE,
@@ -513,53 +620,53 @@ class Game {
             }
         } else if (hit.type === "ground") {
             this.message = "Hit the ground!";
-            // Optional: Add explosion effect on ground?
             destroyedCircles.push({ x: hit.x, y: SCREEN_HEIGHT, radius: DESTROYED_CIRCLE_SIZE / 2}); // Smaller crater
         } else if (hit.type === "wall") {
             this.message = "Hit the wall!";
-        } else if (hit.type === "building_destroyed") {
-             this.message = "Hit an already destroyed area.";
-             // No new explosion or damage
         }
+        // No message change needed for hitting already destroyed parts
 
-
-        // Check for game over after any hit that could cause damage
-        let winner = -1;
-        if (this.gorillas[0].health <= 0 && this.gorillas[1].health <= 0) {
-            // Draw? Or whoever's turn it wasn't wins? Let's say opponent wins.
-             winner = 1 - this.turn;
-             this.message += ` Both players defeated! Player ${winner + 1} wins the round!`;
-        } else if (this.gorillas[0].health <= 0) {
-             winner = 1; // Player 2 wins
-             this.message += ` Player 1 defeated! Player 2 wins the round!`;
-        } else if (this.gorillas[1].health <= 0) {
-             winner = 0; // Player 1 wins
-             this.message += ` Player 2 defeated! Player 1 wins the round!`;
-        }
-
-        if (winner !== -1) {
-            this.scores[winner]++;
-            this.gameOver = true; // Pause updates
-            // Add elapsed round time to total
-            const roundEndTime = performance.now();
-            this.totalTimePaused += (roundEndTime - this.startTime);
-            // Show message and wait before reset
-            setTimeout(() => this.reset_game(), 3000); // Reset after 3 seconds
-        } else {
-             // Switch turns only if game is not over
-             this.turn = 1 - this.turn;
-        }
-
-        // Clamp health display minimum to 0
+        // Clamp health display minimum to 0 after damage calculation
         this.gorillas.forEach(g => { if (g.health < 0) g.health = 0; });
 
+        // --- Check for Game Over ---
+        let winner = -1;
+        const p1_dead = this.gorillas[0].health <= 0;
+        const p2_dead = this.gorillas[1].health <= 0;
+
+        if (p1_dead && p2_dead) {
+             winner = 1 - this.turn; // Opponent wins if both die on current turn's shot
+             this.message += ` Both players defeated! Player ${winner + 1} wins the round!`;
+             roundOver = true;
+        } else if (p1_dead) {
+             winner = 1; // Player 2 wins
+             this.message += ` Player 1 defeated! Player 2 wins the round!`;
+             roundOver = true;
+        } else if (p2_dead) {
+             winner = 0; // Player 1 wins
+             this.message += ` Player 2 defeated! Player 1 wins the round!`;
+             roundOver = true;
+        }
+
+        if (roundOver) {
+            this.scores[winner]++;
+            this.gameOver = true; // Pause updates
+            const roundEndTime = performance.now();
+            this.totalTimePaused += (roundEndTime - this.startTime);
+            // Show game over message and wait before reset
+            setTimeout(() => this.reset_game(), 3000); // Reset after 3 seconds
+        } else {
+             // Switch turns only if game is not over and the bullet hit something
+             this.turn = 1 - this.turn;
+             // Update message only if it wasn't set by the hit itself (e.g., not direct hit/building)
+             if (!this.message || this.message.endsWith("Turn")) { // Avoid overwriting hit messages
+                 this.message = `Player ${this.turn + 1} Turn`;
+             }
+        }
     }
 
     draw(ctx) {
-        // Clear canvas (or Sky draws background)
-        // ctx.clearRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
-
-        this.sky.draw(ctx); // Sky draws its own background
+        this.sky.draw(ctx); // Sky draws background
 
         // Draw Buildings
         this.buildings.forEach(building => building.draw(ctx));
@@ -583,17 +690,56 @@ class Game {
             this.draw_arrow(ctx);
         }
 
-        // Display Final Message if Game Over
+        // Display Final Message if Game Over (draw over UI)
          if (this.gameOver && this.message) {
              ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
              ctx.fillRect(SCREEN_WIDTH / 4, SCREEN_HEIGHT / 3, SCREEN_WIDTH / 2, SCREEN_HEIGHT / 3);
              ctx.fillStyle = YELLOW;
              ctx.font = "40px sans-serif";
              ctx.textAlign = "center";
-             ctx.fillText(this.message, SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2);
+             this.wrapText(ctx, this.message, SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2 - 20, SCREEN_WIDTH / 2 - 40, 45);
              ctx.textAlign = "left"; // Reset
          }
     }
+
+    // Helper for basic text wrapping
+    wrapText(context, text, x, y, maxWidth, lineHeight) {
+        if (!text) return; // Safety check
+        var words = text.split(' ');
+        var line = '';
+        var lines = []; // Store lines to calculate vertical centering later
+
+        // First pass: break text into lines
+        for(var n = 0; n < words.length; n++) {
+          var testLine = line + words[n] + ' ';
+          var metrics = context.measureText(testLine);
+          var testWidth = metrics.width;
+          if (testWidth > maxWidth && n > 0) {
+            lines.push(line.trim());
+            line = words[n] + ' ';
+          }
+          else {
+            line = testLine;
+          }
+        }
+        lines.push(line.trim()); // Add the last line
+
+        // Calculate starting Y for vertical centering
+        const totalTextHeight = lines.length * lineHeight;
+        // Assuming the wrapText is called with y as the intended center of the text block
+        let currentY = y - totalTextHeight / 2 + lineHeight / 2; // Adjust start Y
+
+        context.textBaseline = 'middle'; // Align text vertically better
+
+        // Second pass: draw the lines centered
+        for (let i = 0; i < lines.length; i++) {
+            context.fillText(lines[i], x, currentY);
+            currentY += lineHeight;
+        }
+
+        context.textBaseline = 'alphabetic'; // Reset baseline
+      }
+
 
     draw_destroyed_circles(ctx) {
          // Draw filled explosion area (sky color)
@@ -608,7 +754,7 @@ class Game {
         ctx.strokeStyle = YELLOW;
         ctx.lineWidth = 2;
         destroyedCircles.forEach(circle => {
-             // Draw only if center is roughly on screen (prevent drawing off-screen ground hits far away)
+             // Draw only if center is roughly on screen
              if (circle.x > -circle.radius && circle.x < SCREEN_WIDTH + circle.radius &&
                  circle.y > -circle.radius && circle.y < SCREEN_HEIGHT + circle.radius)
              {
@@ -630,7 +776,7 @@ class Game {
 
         // Player 1 UI (Top Left)
         let yPos = 30;
-        ctx.fillText(`P1 Angle: ${this.angles[0].toFixed(1)}`, 10, yPos);
+        ctx.fillText(`P1 Angle: ${this.angles[0].toFixed(1)}°`, 10, yPos);
         ctx.fillText(`P1 Strength: ${this.strengths[0].toFixed(1)}`, 10, yPos + lineHeight);
         ctx.fillText(`Health: ${Math.max(0, this.gorillas[0].health).toFixed(0)}`, 10, yPos + 2 * lineHeight);
         ctx.fillText(`Score: ${this.scores[0]}`, 10, yPos + 3 * lineHeight);
@@ -639,7 +785,7 @@ class Game {
         // Player 2 UI (Top Right)
         ctx.textAlign = "right";
         yPos = 30;
-        ctx.fillText(`P2 Angle: ${this.angles[1].toFixed(1)}`, SCREEN_WIDTH - 10, yPos);
+        ctx.fillText(`P2 Angle: ${this.angles[1].toFixed(1)}°`, SCREEN_WIDTH - 10, yPos);
         ctx.fillText(`P2 Strength: ${this.strengths[1].toFixed(1)}`, SCREEN_WIDTH - 10, yPos + lineHeight);
         ctx.fillText(`Health: ${Math.max(0, this.gorillas[1].health).toFixed(0)}`, SCREEN_WIDTH - 10, yPos + 2 * lineHeight);
         ctx.fillText(`Score: ${this.scores[1]}`, SCREEN_WIDTH - 10, yPos + 3 * lineHeight);
@@ -648,7 +794,6 @@ class Game {
 
         // Total Time Played (Top Center)
          const currentTime = performance.now();
-         // Calculate current time elapsed only if game is not paused for reset
          const timeElapsed = this.gameOver ? 0 : (currentTime - this.startTime);
          const totalTimePlayedSeconds = (this.totalTimePaused + timeElapsed) / 1000;
 
@@ -656,21 +801,31 @@ class Game {
         ctx.fillText(`Time: ${totalTimePlayedSeconds.toFixed(1)}s`, SCREEN_WIDTH / 2, 30);
         ctx.textAlign = "left"; // Reset alignment
 
-        // Display Message (Below UI)
-        if (this.message && !this.gameOver) { // Don't show turn message if game over message is showing
+        // Display Message (Below Top UI, Above Center) - Show turn info if no other hit message
+        let displayMessage = this.message;
+        if (!this.gameOver && !this.bullet && (!this.message || this.message.includes("Turn"))) {
+             displayMessage = `Player ${this.turn + 1} Turn`;
+        } else if (this.gameOver){
+            displayMessage = ""; // Don't show turn message if game over overlay is shown
+        }
+
+
+        if (displayMessage && !this.gameOver) { // Only show if not game over
             ctx.fillStyle = YELLOW;
             ctx.font = "24px sans-serif";
             ctx.textAlign = "center";
-            ctx.fillText(this.message, SCREEN_WIDTH / 2, 100);
+            ctx.fillText(displayMessage, SCREEN_WIDTH / 2, 70); // Positioned below time
             ctx.textAlign = "left"; // Reset
         }
 
-        // Indicate current turn
+        // Indicate current turn with underline
         ctx.fillStyle = this.turn === 0 ? CYAN : YELLOW;
+        const underlineWidth = 200;
+        const underlineY = 15; // Position above the main text
         if (this.turn === 0) {
-             ctx.fillRect(5, 5, 200, 5); // Line under P1 UI
+             ctx.fillRect(5, underlineY, underlineWidth, 5); // Line under P1 UI area
         } else {
-             ctx.fillRect(SCREEN_WIDTH - 205, 5, 200, 5); // Line under P2 UI
+             ctx.fillRect(SCREEN_WIDTH - underlineWidth - 5, underlineY, underlineWidth, 5); // Line under P2 UI area
         }
     }
 
@@ -679,8 +834,9 @@ class Game {
         const angle = this.angles[this.turn];
         const strength = this.strengths[this.turn];
 
-        // Clamp strength for arrow length visualization if needed, but use real strength for physics
-        const arrowLength = Math.min(strength, 150); // Max arrow length on screen
+        // Visually cap arrow length so it doesn't go crazy off screen at high strengths
+        const visualStrength = Math.min(strength, MAX_SHOOT_STRENGTH * 1.1); // Allow arrow to go slightly past max for visual feedback
+        const arrowLength = Math.min(visualStrength / 1.5, 180); // Scaled and capped length
 
         const radAngle = angle * Math.PI / 180;
         const endX = gorilla.x + arrowLength * Math.cos(radAngle);
@@ -692,6 +848,16 @@ class Game {
         ctx.moveTo(gorilla.x, gorilla.y);
         ctx.lineTo(endX, endY);
         ctx.stroke();
+
+        // Draw arrowhead
+        const arrowAngle = Math.atan2(gorilla.y - endY, endX - gorilla.x); // Angle of the line itself
+        const arrowSize = 8;
+        ctx.beginPath();
+        ctx.moveTo(endX, endY);
+        ctx.lineTo(endX - arrowSize * Math.cos(arrowAngle - Math.PI / 6), endY + arrowSize * Math.sin(arrowAngle - Math.PI / 6));
+        ctx.moveTo(endX, endY);
+        ctx.lineTo(endX - arrowSize * Math.cos(arrowAngle + Math.PI / 6), endY + arrowSize * Math.sin(arrowAngle + Math.PI / 6));
+        ctx.stroke();
     }
 
     update_blinking(currentTime) {
@@ -700,12 +866,20 @@ class Game {
             if (this.buildings.length === 0) continue;
             const building_index = Math.floor(Math.random() * this.buildings.length);
             const building = this.buildings[building_index];
-            if (!building.window_states || building.window_states.length === 0 || building.window_states[0].length === 0) continue;
+            // More robust checks for valid window states
+            if (!building || !building.window_states || building.window_states.length === 0 || !building.window_states[0] || building.window_states[0].length === 0) continue;
 
-            const row_index = Math.floor(Math.random() * building.window_states.length);
-            const col_index = Math.floor(Math.random() * building.window_states[0].length); // Assumes all rows same length
+            const num_rows = building.window_states.length;
+            const num_cols = building.window_states[0].length;
 
-            building.window_states[row_index][col_index] = !building.window_states[row_index][col_index];
+            if (num_rows > 0 && num_cols > 0) {
+                const row_index = Math.floor(Math.random() * num_rows);
+                const col_index = Math.floor(Math.random() * num_cols);
+                // Check if indices are valid before accessing
+                if (building.window_states[row_index] !== undefined && building.window_states[row_index][col_index] !== undefined) {
+                    building.window_states[row_index][col_index] = !building.window_states[row_index][col_index];
+                }
+            }
         }
         // Schedule next blink
         this.nextBlinkTime = currentTime + (Math.random() * 0.5 + 0.25) * 1000; // 0.25 to 0.75 seconds later
@@ -715,11 +889,13 @@ class Game {
         console.log("Resetting game...");
         destroyedCircles = []; // Clear explosion marks
         this.buildings = this.create_buildings();
-        this.gorillas = this.place_gorillas(); // Places based on new buildings
+        // Make sure gorillas are placed *after* new buildings exist
+        this.gorillas = this.place_gorillas();
         this.bullet = null;
-        this.message = "New Round!";
-        this.turn = Math.floor(Math.random() * 2); // Random starting player? Or alternate? Let's keep 0
+        // this.turn remains the same, winner starts next round? Or alternate? Keep same for now.
+        this.message = `Player ${this.turn + 1} Turn`; // Indicate whose turn starts
         // Keep scores, shots_fired, totalTimePaused
+        // Reset angles/strengths
         this.angles = [45, 135];
         this.strengths = [100, 100];
         this.startTime = performance.now(); // Reset round timer
@@ -727,24 +903,25 @@ class Game {
         this.gameOver = false; // Allow updates again
         this.lastFrameTime = performance.now(); // Reset delta time calculation
         // Clear lingering key presses
-        //keysPressed = {}; // Optionally clear keys, or let user keep holding
         this.keyPressDurations = { ArrowLeft: 0, ArrowRight: 0, ArrowUp: 0, ArrowDown: 0 };
-
-        // Need to restart the game loop if it was fully stopped
-        // But requestAnimationFrame usually keeps running unless explicitly cancelled
+        // keysPressed = {}; // Optionally clear global state too
     }
 }
 
 
 // --- Event Listeners ---
 window.addEventListener('keydown', (e) => {
-    // Use e.key for modern browsers
+    // Use e.key for modern browsers - ArrowLeft, ArrowRight, ArrowUp, ArrowDown, Space
     keysPressed[e.key] = true;
 
+    // Prevent default browser action for arrow keys and space (scrolling)
+    if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', ' '].includes(e.key)) {
+        e.preventDefault();
+    }
+
     // Handle Spacebar for shooting
-    if (e.key === ' ' || e.key === 'Spacebar') { // Spacebar might have different keys depending on browser
-        e.preventDefault(); // Prevent scrolling page down
-        if (game) {
+    if (e.key === ' ' || e.key === 'Spacebar') { // Check both possible values
+        if (game) { // Ensure game object exists
              game.shoot();
         }
     }
@@ -752,8 +929,8 @@ window.addEventListener('keydown', (e) => {
 
 window.addEventListener('keyup', (e) => {
     keysPressed[e.key] = false;
-    // Reset duration when key is released
-     if (game && game.keyPressDurations.hasOwnProperty(e.key)) {
+    // Reset duration when key is released - ensure the key exists in durations object
+     if (game && game.keyPressDurations && game.keyPressDurations.hasOwnProperty(e.key)) {
          game.keyPressDurations[e.key] = 0;
      }
 });
@@ -764,17 +941,24 @@ let lastTime = 0;
 
 function gameLoop(timestamp) {
     // Calculate delta time in seconds
+    if (lastTime === 0) { // Initialize lastTime on first frame
+        lastTime = timestamp;
+    }
     const deltaTime = (timestamp - lastTime) / 1000;
     lastTime = timestamp;
 
-    // Guard against huge deltaTime spikes (e.g., tab unfocus)
-    const dt = Math.min(deltaTime, 0.1); // Max delta time step 100ms
+    // Guard against huge deltaTime spikes (e.g., tab unfocus) and zero/negative delta
+    const dt = Math.max(0, Math.min(deltaTime, 0.1)); // Max delta time step 100ms, ensure non-negative
 
-    // Update game state
-    game.update(dt);
+    // Update game state only if deltaTime is valid and game object exists
+    if (dt > 0 && game) {
+       game.update(dt);
+    }
 
-    // Draw the game
-    game.draw(ctx);
+    // Draw the game regardless of update pause (but check if game exists)
+    if (game) {
+       game.draw(ctx);
+    }
 
     // Request next frame
     requestAnimationFrame(gameLoop);
@@ -783,8 +967,9 @@ function gameLoop(timestamp) {
 // --- Start Game ---
 function startGame() {
     game = new Game();
-    lastTime = performance.now(); // Initialize lastTime
+    lastTime = 0; // Reset lastTime for the first frame calculation
     requestAnimationFrame(gameLoop);
 }
 
-startGame();
+// Wait for the DOM to be fully loaded before starting
+document.addEventListener('DOMContentLoaded', startGame);
