@@ -46,9 +46,10 @@ A retro-style artillery game inspired by the classic "Gorillas" game, rebuilt us
 
 ```text
 index.html      # HTML container with canvas
-main.js         # Game logic (contains all classes and rendering)
+script.js         # Game logic (contains all classes and rendering)
+style.css
 README.md       # Project documentation (this file)
-
+```
 
 ## 🧠 Math Notes
 
