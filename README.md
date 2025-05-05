@@ -31,9 +31,13 @@ A retro-style artillery game inspired by the classic "Gorillas" game, rebuilt us
 
 > Note: Controls apply to the current active player. The game is turn-based.
 
+---
 ## 📷 Screenshots
 
-![Gameplay Screenshot](screenshot.png) *(Replace with actual screenshot)*
+### Game
+![Game 1](screenshots/game_1.png)
+
+---
 
 ## 🛠️ Tech Stack
 
