@@ -1,16 +1,136 @@
+/* ROOT & BODY SETUP */
 body {
     margin: 0;
     padding: 0;
-    overflow: hidden; /* Prevent scrollbars */
+    background-color: #222; /* Background behind the canvas */
     display: flex;
     justify-content: center;
     align-items: center;
-    min-height: 100vh; /* Ensure body takes full height */
-    background-color: #222; /* Background behind the canvas */
+    height: 100vh;
+    width: 100vw;
+    overflow: hidden; /* Prevent scrollbars */
+    color: white;
+}
+
+/* --- MOBILE MODE LOCK --- */
+/* Applied by JS when fullscreen is active */
+body.mobile-mode {
+    position: fixed;
+    width: 100%;
+    height: 100%;
+    top: 0;
+    left: 0;
+    touch-action: none; /* Disables browser gestures/zooming */
+}
+
+/* --- THE SCREEN (Fixed Internal Resolution) --- */
+#screen {
+    width: 1920px;  /* Matched to script.js SCREEN_WIDTH */
+    height: 1010px; /* Matched to script.js SCREEN_HEIGHT */
+    background-color: #0000FF; /* Default sky blue */
+    position: relative;
+    overflow: hidden;
+    /* Important for scaling from the middle */
+    transform-origin: center center;
+    box-shadow: 0 0 50px rgba(0,0,0,0.8);
+    flex-shrink: 0;
 }
 
 canvas {
     display: block; /* Removes potential extra space below */
-    background-color: #0000FF; /* Default sky blue if needed */
-    /* The canvas size is set in JavaScript */
+    width: 100%;
+    height: 100%;
+}
+
+/* --- TOGGLE BUTTON --- */
+#mobile-btn {
+    position: fixed;
+    top: 20px; 
+    left: 20px;
+    z-index: 2000;
+    background: #333;
+    color: white;
+    border: 2px solid white;
+    border-radius: 8px;
+    font-size: 16px;
+    padding: 10px 15px;
+    cursor: pointer;
+    font-family: sans-serif;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.5);
+}
+
+/* Hide the button when in mobile mode */
+body.mobile-mode #mobile-btn { 
+    display: none; 
+}
+
+/* --- MOBILE CONTROLS OVERLAY --- */
+#mobile-controls {
+    position: fixed;
+    top: 0; left: 0; width: 100%; height: 100%;
+    pointer-events: none; /* Let clicks pass through to empty space */
+    z-index: 3000;
+    display: none; /* Hidden by default */
+    justify-content: space-between;
+    align-items: flex-end;
+    padding: 20px;
+    box-sizing: border-box;
+}
+
+/* Show controls only when in mobile mode */
+body.mobile-mode #mobile-controls {
+    display: flex;
+}
+
+/* --- CONTROL BUTTONS --- */
+.mobile-control-btn {
+    pointer-events: auto; /* Re-enable clicks for buttons */
+    width: 75px; 
+    height: 75px;
+    background: rgba(255,255,255,0.15);
+    border: 3px solid rgba(255,255,255,0.4);
+    border-radius: 50%;
+    color: white;
+    font-size: 30px;
+    display: flex; justify-content: center; align-items: center;
+    user-select: none;
+    backdrop-filter: blur(4px);
+    margin: 5px;
+    transition: transform 0.1s, background 0.1s;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.mobile-control-btn:active {
+    background: rgba(255,255,255,0.4);
+    transform: scale(0.95);
+}
+
+#mobile-dpad {
+    display: flex;
+    align-items: center; /* Center the arrows vertically */
+    gap: 5px;
+    margin-left: 20px;
+    margin-bottom: 20px;
+}
+
+.vertical-controls {
+    display: flex;
+    flex-direction: column;
+}
+
+#mobile-action {
+    margin-right: 40px;
+    margin-bottom: 40px;
+}
+
+/* Make the shoot button a bit bigger and red */
+.shoot-btn {
+    width: 90px;
+    height: 90px;
+    font-size: 40px;
+    background: rgba(255, 50, 50, 0.3);
+    border-color: rgba(255, 50, 50, 0.6);
+}
+.shoot-btn:active {
+    background: rgba(255, 50, 50, 0.6);
 }

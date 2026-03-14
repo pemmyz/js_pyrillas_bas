@@ -1124,3 +1124,109 @@ function startGame() {
 
 // Wait for the DOM to be fully loaded before starting
 document.addEventListener('DOMContentLoaded', startGame);
+
+
+// ==========================================
+// --- FULLSCREEN & MOBILE CONTROLS LOGIC ---
+// ==========================================
+
+const mobileToggleBtn = document.getElementById('mobile-btn');
+const mobileControls = document.getElementById('mobile-controls');
+const screenElement = document.getElementById("screen");
+
+// --- 1. SCALING LOGIC ---
+function scaleGame() {
+    if (!screenElement) return;
+    
+    const isFullscreen = document.fullscreenElement || document.webkitFullscreenElement;
+    
+    if (isFullscreen) {
+        const baseWidth = SCREEN_WIDTH;   // 1920
+        const baseHeight = SCREEN_HEIGHT; // 1010
+        
+        // Calculate the scale to fit the window while maintaining aspect ratio
+        const scale = Math.min(
+            window.innerWidth / baseWidth,
+            window.innerHeight / baseHeight
+        );
+        
+        screenElement.style.transform = `scale(${scale})`;
+        document.body.classList.add('mobile-mode'); // Activates CSS lock
+    } else {
+        screenElement.style.transform = 'none'; 
+        document.body.classList.remove('mobile-mode');
+    }
+}
+
+// --- 2. FULLSCREEN TRIGGER ---
+function goFull() {
+    const el = document.documentElement;
+    if (el.requestFullscreen) el.requestFullscreen();
+    else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+}
+
+// Listeners for resizing and fullscreen changes
+window.addEventListener("resize", scaleGame);
+window.addEventListener("fullscreenchange", scaleGame);
+window.addEventListener("webkitfullscreenchange", scaleGame);
+
+// Button Listener
+if (mobileToggleBtn) {
+    mobileToggleBtn.addEventListener('click', goFull);
+}
+
+// --- 3. MOBILE CONTROLS LOGIC ---
+function setupMobileControls() {
+    if (!mobileControls) return;
+
+    // Helper to map touch/mouse events to your keysPressed object
+    const addControlListener = (elementId, key) => {
+        const element = document.getElementById(elementId);
+        if (!element) return;
+        
+        const pressKey = (e) => {
+            // Prevent default browser zooming/scrolling behavior
+            if(e.cancelable) e.preventDefault(); 
+            keysPressed[key] = true;
+            
+            // If the shoot button is pressed, trigger game.shoot()
+            if (key === ' ' && game && !game.gameOver && !game.bullet) {
+                game.shoot();
+            }
+        };
+        const releaseKey = (e) => {
+            if(e.cancelable) e.preventDefault();
+            keysPressed[key] = false;
+            
+            // Reset duration when key is released (matches keyup listener)
+            if (game && game.keyPressDurations && game.keyPressDurations.hasOwnProperty(key)) {
+                game.keyPressDurations[key] = 0;
+            }
+        };
+
+        // Touch Events
+        element.addEventListener('touchstart', pressKey, { passive: false });
+        element.addEventListener('touchend', releaseKey, { passive: false });
+        element.addEventListener('touchcancel', releaseKey, { passive: false });
+        
+        // Mouse Events (for testing on desktop)
+        element.addEventListener('mousedown', pressKey);
+        element.addEventListener('mouseup', releaseKey);
+        element.addEventListener('mouseleave', (e) => {
+            if (e.buttons === 1) { releaseKey(e); }
+        });
+    };
+
+    // Map DOM Buttons to the Game Engine Keys
+    addControlListener('mobile-left', 'ArrowLeft');
+    addControlListener('mobile-right', 'ArrowRight');
+    addControlListener('mobile-up', 'ArrowUp');
+    addControlListener('mobile-down', 'ArrowDown');
+    addControlListener('mobile-shoot', ' ');
+}
+
+// Initialize controls and scaling after DOM loads
+document.addEventListener('DOMContentLoaded', () => {
+    scaleGame();
+    setupMobileControls();
+});
