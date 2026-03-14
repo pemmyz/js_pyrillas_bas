@@ -775,7 +775,7 @@ class Game {
             ctx.fillStyle = YELLOW;
             ctx.font = "24px sans-serif";
             ctx.textAlign = "center";
-            // <<< UPDATED Y-Coordinate: Draw below the sun (bottom edge approx Y=140)
+            // Draw below the sun
             ctx.fillText(displayMessage, SCREEN_WIDTH / 2, 170);
             ctx.textAlign = "left"; // Reset
         }
@@ -897,39 +897,37 @@ class Game {
         const lineHeight = 25;
 
         // Player 1 UI (Top Left)
-        let yPos = 30;
+        let yPos = 130; // <<< CHANGED: Moved down 4 rows (previously 30)
         ctx.fillText(`P1 Angle: ${this.angles[0].toFixed(1)}°`, 10, yPos);
         ctx.fillText(`P1 Strength: ${this.strengths[0].toFixed(1)}`, 10, yPos + lineHeight);
-        ctx.fillText(`Health: ${Math.max(0, Math.round(this.gorillas[0].health)).toFixed(0)}`, 10, yPos + 2 * lineHeight); // Round health for display
+        ctx.fillText(`Health: ${Math.max(0, Math.round(this.gorillas[0].health)).toFixed(0)}`, 10, yPos + 2 * lineHeight); 
         ctx.fillText(`Score: ${this.scores[0]}`, 10, yPos + 3 * lineHeight);
         ctx.fillText(`Shots: ${this.shots_fired[0]}`, 10, yPos + 4 * lineHeight);
 
         // Player 2 UI (Top Right)
         ctx.textAlign = "right";
-        yPos = 30;
+        yPos = 130; // <<< CHANGED: Moved down 4 rows (previously 30)
         ctx.fillText(`P2 Angle: ${this.angles[1].toFixed(1)}°`, SCREEN_WIDTH - 10, yPos);
         ctx.fillText(`P2 Strength: ${this.strengths[1].toFixed(1)}`, SCREEN_WIDTH - 10, yPos + lineHeight);
-        ctx.fillText(`Health: ${Math.max(0, Math.round(this.gorillas[1].health)).toFixed(0)}`, SCREEN_WIDTH - 10, yPos + 2 * lineHeight); // Round health for display
+        ctx.fillText(`Health: ${Math.max(0, Math.round(this.gorillas[1].health)).toFixed(0)}`, SCREEN_WIDTH - 10, yPos + 2 * lineHeight); 
         ctx.fillText(`Score: ${this.scores[1]}`, SCREEN_WIDTH - 10, yPos + 3 * lineHeight);
         ctx.fillText(`Shots: ${this.shots_fired[1]}`, SCREEN_WIDTH - 10, yPos + 4 * lineHeight);
         ctx.textAlign = "left"; // Reset alignment
 
         // Total Time Played (Top Center)
          const currentTime = performance.now();
-         // If game over, time doesn't advance further in this round. Show the total accumulated time.
-         // If not game over, add the time elapsed since the round started.
          const timeElapsedThisRound = this.gameOver ? 0 : (currentTime - this.startTime);
          const totalTimePlayedSeconds = (this.totalTimePaused + timeElapsedThisRound) / 1000;
 
         ctx.textAlign = "center";
-        ctx.fillText(`Time: ${totalTimePlayedSeconds.toFixed(1)}s`, SCREEN_WIDTH / 2, 30);
+        ctx.fillText(`Time: ${totalTimePlayedSeconds.toFixed(1)}s`, SCREEN_WIDTH / 2, 205); // <<< CHANGED: Moved down 4 rows
         ctx.textAlign = "left"; // Reset alignment
 
         // Indicate current turn with underline (draw regardless of message)
         ctx.fillStyle = this.turn === 0 ? CYAN : YELLOW;
         const underlineWidth = 200;
-        const underlineY = 15; // Position above the main text
-        if (!this.gameOver) { // Only show underline if game is active
+        const underlineY = 115; // <<< CHANGED: Moved down 4 rows (previously 15)
+        if (!this.gameOver) { 
             if (this.turn === 0) {
                  ctx.fillRect(5, underlineY, underlineWidth, 5); // Line under P1 UI area
             } else {
